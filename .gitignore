@@ -1,0 +1,13 @@
+# pycharm
+.idea/
+
+# python
+__pycache__/
+venv/
+
+# model
+model/
+*.bin
+
+# log
+*.txt
