@@ -51,7 +51,7 @@ class Attention(nn.Module):
         # base module
         self.to_q = nn.Linear(self.dim, self.n_heads * self.head_dim, bias = False)
         self.to_kv = nn.Linear(self.dim, 2 * self.n_kv_heads * self.head_dim, bias = False)
-        self.to_out = nn.Linear(self.n_heads * self.head_dim, self.dim)
+        self.to_out = nn.Linear(self.n_heads * self.head_dim, self.dim, bias = False)
         self.dropout = nn.Dropout(self.dropout_rate)
 
     def forward(self, x, cos_sin, attn_mask, kv_cache = None):
@@ -110,20 +110,20 @@ class FFN(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
         # base param
-        self.dim = config.text_dim
+        self.text_dim = config.text_dim
+        inter_dim = int(self.text_dim * 8 / 3)
+        self.inter_dim = 64 * ((inter_dim + 64 - 1) // 64)
         self.dropout_rate = config.text_dropout_rate
         # base module
-        self.ffn = nn.Sequential(
-            nn.Linear(self.dim, self.dim * 4),
-            nn.GELU(),
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(self.dim * 4, self.dim),
-            nn.Dropout(self.dropout_rate)
-        )
+        self.w1 = nn.Linear(self.text_dim, self.inter_dim, bias = False)
+        self.w2 = nn.Linear(self.inter_dim, self.text_dim, bias = False)
+        self.w3 = nn.Linear(self.text_dim, self.inter_dim, bias = False)
+        self.silu = nn.SiLU()
+        self.dropout = nn.Dropout(self.dropout_rate)
 
     def forward(self, x):
         # x:[b, n, d]
-        out = self.ffn(x)
+        out = self.dropout(self.w2(self.silu(self.w1(x)) * self.w3(x)))
         return out
 
 
@@ -202,6 +202,35 @@ class ThinkChat(nn.Module):
 
         out = self.to_out(x)
         return out
+
+    def generate(self, input_ids, start_pos = 0, attention_mask = None, kv_cache = None, max_len = 512,
+                 temperature = 0.7, top_p = 0.85, rp = 1.05, eos_token_id = None):
+        # print(input_ids.shape)
+        init_start_pos = input_ids.shape[1]
+        for _ in range(max_len):
+            with torch.no_grad():
+                out = self(input_ids[:, start_pos:], start_pos = start_pos, attn_mask = attention_mask, kv_cache = kv_cache)
+            start_pos += input_ids[:, start_pos:].shape[1]
+            logits = out[:, -1, :]
+            logits[:, input_ids[0].unique()] /= rp
+            logits /= (temperature + 1e-9)
+
+            if top_p is not None and top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending = True, dim = -1)
+                cumulative_probs = torch.softmax(sorted_logits, dim = -1).cumsum(dim = -1)
+                sorted_indices_to_remove = cumulative_probs > top_p
+                # 首次超过为True，后续的为False
+                sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
+                sorted_indices_to_remove[:, 0] = False
+                # print(sorted_indices_to_remove.shape, sorted_indices.shape)
+                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                logits[indices_to_remove] = -float('Inf')
+
+            input_ids_next = torch.multinomial(torch.softmax(logits, dim = -1), num_samples = 1)
+            input_ids = torch.cat((input_ids, input_ids_next), dim = 1)
+            if input_ids_next.item() == eos_token_id:
+                return input_ids[:, init_start_pos:]
+        return input_ids[:, init_start_pos:]
 
 
 if __name__ == "__main__":
