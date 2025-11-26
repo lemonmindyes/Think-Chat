@@ -7,18 +7,20 @@ import torch
 import torch.nn as nn
 
 from config import Config
-from gpt import ThinkChat
 from dataset import SFTDataset
+from gpt import ThinkChat
 
 
 if __name__ == '__main__':
     # param
     dtype = torch.bfloat16
-    batch_size = 8
+    batch_size = 16
     base_lr = 5e-5
     warmup_ratio = 0.02
     grad_clip = 1.0
-    accumulation_steps = 4
+    accumulation_steps = 2
+    model_save_step = 100
+    log_print_save_step = 100
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     ctx = nullcontext() if device.type == 'cpu' else torch.amp.autocast(device_type = device.type, dtype = dtype)
@@ -37,7 +39,8 @@ if __name__ == '__main__':
     scaler = torch.amp.GradScaler(enabled = (device.type == 'cuda'))
     opt = torch.optim.AdamW(model.parameters(), lr = base_lr, betas = (0.9, 0.95), weight_decay = 0.0)
 
-    total_step = 30000
+    update_step = 300000  # update iter
+    total_step = update_step * accumulation_steps
     warmup_step = int(warmup_ratio * total_step)
     if not os.path.exists('sft_train_log.txt'):
         with open('sft_train_log.txt', 'a', encoding='utf-8') as f:
@@ -89,56 +92,42 @@ if __name__ == '__main__':
 
         current_step += 1
 
-        if step % 20 == 0:
+        if (step + 1) % log_print_save_step == 0:
             print(f'Step:{step + 1}/{total_step}, Loss:{loss.item() * accumulation_steps:.4f}, '
                   f'Lr:{opt.param_groups[0]["lr"]:.6f}, Time:{time.time() - start_time:.2f}')
             with open('sft_train_log.txt', 'a', encoding ='utf-8') as f:
                 f.write(f'{step + 1}, {loss.item() * accumulation_steps:.4f}, {opt.param_groups[0]["lr"]:.6f}, '
                         f'{time.time() - start_time:.2f}\n')
 
-        if step % 100 == 0:
+        if (step + 1) % log_print_save_step == 0:
             from transformers import AutoTokenizer
+
             model.eval()
             tokenizer = AutoTokenizer.from_pretrained('./model/think_tokenizer')
 
-            text = f'<im_start>user\n写一篇关于人工智能的未来发展的文章。\n<im_end>\n<im_start>assistant\n'
+            text = f'<im_start>user\n解释全球气候变化对人类的影响，并探讨可持续发展的方法。\n<im_end>\n<im_start>assistant\n'
 
             encoder = tokenizer.batch_encode_plus([text])
-            input_ids = torch.tensor(encoder['input_ids'], dtype = torch.long, device = device)
-            attention_mask = torch.tensor(encoder['attention_mask'], dtype = torch.long, device = device)
+            input_ids = torch.tensor(encoder['input_ids'], dtype=torch.long, device=device)
+            attention_mask = torch.tensor(encoder['attention_mask'], dtype=torch.long, device=device)
             # print(input_ids)
             # print(attention_mask)
             kv_cache = {}
-            out = None
-            pred = []
             start_pos = 0
-            n = input_ids.shape[1]
-            for i in range(config.max_seq_len):
-                with torch.no_grad():
-                    out = model(input_ids, start_pos, attention_mask, kv_cache)
-                pred.append(tokenizer.decode(out[0:, -1].argmax(dim=-1)[0].item()))
-                if pred[-1] == '<im_end>':
-                    break
-
-                input_ids = out[:, -1:].argmax(dim=-1)
-                attention_mask = None
-                if i == 0:
-                    start_pos = n
-                else:
-                    start_pos += 1
-                # print(start_pos)
-                # print(kv_cache[0]['k'].shape, kv_cache[0]['v'].shape)
+            out = model.generate(input_ids, start_pos, attention_mask, kv_cache, temperature=0.7, top_p=0.85,
+                                 rp=1.05, eos_token_id=2)
+            pred = tokenizer.decode(out[0, :])
             print(text + ''.join(pred))
 
-        if step % 1000 == 0:
+        if (step + 1) % model_save_step == 0:
             checkpoint = {
                 'model': model.state_dict(),
                 'opt': opt.state_dict(),
                 'scaler': scaler.state_dict(),
                 'current_step': current_step
             }
-            torch.save(checkpoint, 'sft_checkpoint.bin.pt')
-            os.replace('sft_checkpoint.bin.pt', 'sft_checkpoint.bin')
+            torch.save(checkpoint, 'sft_checkpoint.bin.tmp')
+            os.replace('sft_checkpoint.bin.tmp', 'sft_checkpoint.bin')
 
     checkpoint = {
         'model': model.state_dict(),
@@ -146,8 +135,8 @@ if __name__ == '__main__':
         'scaler': scaler.state_dict(),
         'current_step': current_step
     }
-    torch.save(checkpoint, 'sft_checkpoint.bin.pt')
-    os.replace('sft_checkpoint.bin.pt', 'sft_checkpoint.bin')
+    torch.save(checkpoint, 'sft_checkpoint.bin.tmp')
+    os.replace('sft_checkpoint.bin.tmp', 'sft_checkpoint.bin')
 
 
 
