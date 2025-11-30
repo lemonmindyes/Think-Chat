@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
@@ -44,7 +46,7 @@ class Attention(nn.Module):
         self.dim = config.text_dim
         self.n_heads = config.text_n_heads
         self.n_kv_heads = config.text_n_kv_heads
-        # assert self.n_heads % self.n_kv_heads == 0, 'n_heads must be divisible by n_kv_heads'
+        assert self.n_heads % self.n_kv_heads == 0, 'n_heads must be divisible by n_kv_heads'
         self.head_dim = self.dim // self.n_heads
         self.scale = self.head_dim ** -0.5
         self.dropout_rate = config.text_dropout_rate
@@ -161,25 +163,29 @@ class ThinkChat(nn.Module):
         self.max_seq_len = config.max_seq_len
         self.dim = config.text_dim
         self.n_heads = config.text_n_heads
-        # assert self.dim % self.n_heads == 0, 'dim must be divisible by n_heads'
+        assert self.dim % self.n_heads == 0, 'dim must be divisible by n_heads'
         self.head_dim = self.dim // self.n_heads
         # base module
         self.token_embedding = nn.Embedding(self.vocab_size, self.dim)
-        self.cos, self.sin = self._precompute_rotary_embedding(self.max_seq_len * 4, self.head_dim)
+        self.cos, self.sin = self._precompute_rotary_embedding(self.max_seq_len * 4, self.head_dim,
+                                                               use_yarn = config.use_yarn)
         self.transformer = Transformer(config)
         self.to_out = nn.Linear(self.dim, self.vocab_size)
 
-    def _precompute_rotary_embedding(self, seq_len, head_dim, base = 10000, yarn_alpha = 0.4, yarn_m_scale = 0.6):
+    def _precompute_rotary_embedding(self, seq_len, head_dim, base = 1e6, beta_slow = 1.0, beta_fast = 4.0,
+                                     factor = 4, ori_max_seq_len = 512, use_yarn = False):
         freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype = torch.float32) / head_dim))
+        if use_yarn and seq_len / ori_max_seq_len > 1.0:
+            corr_dim = next((i for i in range(head_dim // 2) if 2 * math.pi / freqs[i] > ori_max_seq_len), head_dim // 2)
+            power = torch.arange(0, head_dim // 2, device = freqs.device).float() / max(head_dim // 2 - 1, 1)
+            beta = beta_slow + (beta_fast - beta_slow) * power
+            # λ = (β·α - β + 1)/(β·α) YaRN标准公式
+            scale = torch.where(torch.arange(head_dim // 2, device = freqs.device) < corr_dim,
+                                (beta * factor - beta + 1) / (beta * factor), 1.0 / factor)
+            freqs = freqs * scale
 
         t = torch.arange(seq_len, dtype = torch.float32)
-        m = int(seq_len * yarn_m_scale) # 临界点
-        t_mapped = t.clone()
-        # 长区间部分缩放
-        long_pos = t > m
-        t_mapped[long_pos] = m + (t[long_pos] - m).pow(yarn_alpha)
-
-        freqs = torch.outer(t_mapped, freqs)
+        freqs = torch.outer(t, freqs)
         cos, sin = freqs.cos(), freqs.sin()
         cos, sin = cos[None, :, None, :], sin[None, :, None, :]
         return cos, sin
@@ -209,7 +215,8 @@ class ThinkChat(nn.Module):
         init_start_pos = input_ids.shape[1]
         for _ in range(max_len):
             with torch.no_grad():
-                out = self(input_ids[:, start_pos:], start_pos = start_pos, attn_mask = attention_mask, kv_cache = kv_cache)
+                out = self(input_ids[:, start_pos:], start_pos = start_pos, attn_mask = attention_mask,
+                           kv_cache = kv_cache)
             start_pos += input_ids[:, start_pos:].shape[1]
             logits = out[:, -1, :]
             logits[:, input_ids[0].unique()] /= rp
@@ -235,13 +242,13 @@ class ThinkChat(nn.Module):
 
 if __name__ == "__main__":
     config = Config()
-    config.is_flash = False
-    model = GPT(config)
+    config.is_flash = True
+    model = ThinkChat(config)
     total_params = sum(p.numel() for p in model.parameters())
     print(total_params)
     # print(model)
 
-    data = torch.randint(0, 12000, (2, 8))
-    attn_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 0, 0],
-                              [1, 1, 1, 1, 1, 0, 0, 0]])
-    print(model(data, start_pos = 0, attn_mask = attn_mask, kv_cache = None).shape)
+    data = torch.randint(0, 12000, (2, 1024))
+    # attn_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 0, 0],
+    #                           [1, 1, 1, 1, 1, 0, 0, 0]])
+    print(model(data, start_pos = 0, attn_mask = None, kv_cache = None).shape)
