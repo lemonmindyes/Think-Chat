@@ -172,8 +172,8 @@ class ThinkChat(nn.Module):
         self.transformer = Transformer(config)
         self.to_out = nn.Linear(self.dim, self.vocab_size)
 
-    def _precompute_rotary_embedding(self, seq_len, head_dim, base = 1e6, beta_slow = 1.0, beta_fast = 4.0,
-                                     factor = 4, ori_max_seq_len = 512, use_yarn = False):
+    def _precompute_rotary_embedding(self, seq_len, head_dim, base = 1e6, beta_slow = 1.0, beta_fast = 32.0,
+                                     factor = 16, ori_max_seq_len = 2048, use_yarn = False):
         freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype = torch.float32) / head_dim))
         if use_yarn and seq_len / ori_max_seq_len > 1.0:
             corr_dim = next((i for i in range(head_dim // 2) if 2 * math.pi / freqs[i] > ori_max_seq_len), head_dim // 2)
@@ -211,7 +211,6 @@ class ThinkChat(nn.Module):
 
     def generate(self, input_ids, start_pos = 0, attention_mask = None, kv_cache = None, max_len = 512,
                  temperature = 0.7, top_p = 0.85, rp = 1.05, eos_token_id = None):
-        # print(input_ids.shape)
         init_start_pos = input_ids.shape[1]
         for _ in range(max_len):
             with torch.no_grad():
