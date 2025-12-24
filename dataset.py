@@ -10,30 +10,28 @@ from transformers import AutoTokenizer
 from config import Config
 
 
-# Mini
-# zh_tokens: 598762007
-# en_tokens: 662435561
-# mix_tokens: 0
-# total_tokens: 1261197568
-# zh_lines: 1969064
-# en_lines: 3030936
-# mix_lines: 0
-# total_lines: 5000000
-# zh_avg_tokens_per_line: 304.08
-# en_avg_tokens_per_line: 218.56
-# avg_tokens_per_line: 252.24
-# Full
-# zh_tokens: 4046195821
-# en_tokens: 4990611528
-# mix_tokens: 0
-# total_tokens: 9036807349
-# zh_lines: 14471506
-# en_lines: 22778494
-# mix_lines: 0
-# total_lines: 37250000
-# zh_avg_tokens_per_line: 279.60
-# en_avg_tokens_per_line: 219.09
-# avg_tokens_per_line: 242.60
+'''
+================================
+Mini:
+English Tokens: 10489525 (2.40%)
+Chinese Tokens: 426094415 (97.60%)
+Total Tokens: 436583940
+English Lines: 36144
+Chinese Lines: 1297855
+Total Lines: 1333999
+Min Tokens / Line: 22
+Max Tokens / Line: 656
+================================
+Medium:
+English Tokens: 32145048 (3.60%)
+Chinese Tokens: 860647884 (96.40%)
+Total Tokens: 892792932
+English Lines: 123969
+Chinese Lines: 3210030
+Total Lines: 3333999
+Min Tokens / Line: 14
+Max Tokens / Line: 661
+'''
 class PretrainDataset(Dataset):
 
     def __init__(self, config: Config, data_path, tokenizer_path, lru_size = 32, reuse_count = 16):
@@ -121,6 +119,38 @@ class PretrainDataset(Dataset):
         return x, y, attn_mask, loss_mask
 
 
+'''
+================================
+Nano:
+English Tokens: 195939 (4.35%)
+Chinese Tokens: 4304232 (95.59%)
+Total Tokens: 4502687
+English Conversations: 1740
+Chinese Conversations: 31133
+Total Conversations: 32932
+Min Tokens / Conversation: 24
+Max Tokens / Conversation: 397
+================================
+Mini:
+English Tokens: 37745375 (6.71%)
+Chinese Tokens: 523146804 (92.93%)
+Total Tokens: 562921780
+English Conversations: 256966
+Chinese Conversations: 3131580
+Total Conversations: 3417957
+Min Tokens / Conversation: 22
+Max Tokens / Conversation: 511
+================================
+Full:
+English Tokens: 106926480 (6.74%)
+Chinese Tokens: 1471463540 (92.75%)
+Total Tokens: 1586490542
+English Conversations: 798153
+Chinese Conversations: 9655320
+Total Conversations: 10548334
+Min Tokens / Conversation: 22
+Max Tokens / Conversation: 511
+'''
 class SFTDataset(Dataset):
 
     def __init__(self, config: Config, data_path, tokenizer_path, lru_size = 32, reuse_count = 16):
@@ -140,10 +170,10 @@ class SFTDataset(Dataset):
             data = []
             with open(path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    text = json.loads(line.strip())['conversions']
+                    text = json.loads(line.strip())['conversations']
                     tmp = ''
                     for i, v in enumerate(text):
-                        tmp += f'<im_start>{v["from"].strip()}\n{v["content"].strip()}\n<im_end>\n'
+                        tmp += f'<im_start>{v["role"].strip()}\n{v["content"].strip()}\n<im_end>\n'
                     data.append(tmp)
             return data
 
@@ -196,14 +226,16 @@ class SFTDataset(Dataset):
         attention_mask = encoder['attention_mask']
         loss_mask = self.get_loss_mask(input_ids, attention_mask)
         # print(self.tokenizer.decode(input_ids[0]))
+        # print(self.tokenizer.decode(input_ids[0][attention_mask[0] == 1]))
+        # print("===========================")
+        # print(self.tokenizer.decode(input_ids[1]))
+        # print(self.tokenizer.decode(input_ids[1][attention_mask[1] == 1]))
+        #
+        # print(self.tokenizer.decode(input_ids[0]))
         # print(self.tokenizer.decode(input_ids[0][loss_mask[0] == 1]))
         # print("===========================")
         # print(self.tokenizer.decode(input_ids[1]))
         # print(self.tokenizer.decode(input_ids[1][loss_mask[1] == 1]))
-
-        # print(batch[0])
-        # print("=====================")
-        # print(self.tokenizer.decode(input_ids[0][loss_mask[0] == True]))
         x = input_ids[:, :-1]
         y = input_ids[:, 1:]
         attn_mask = attention_mask[:, :-1]
@@ -349,15 +381,15 @@ if __name__ == '__main__':
     config = Config()
     tokenizer_path = './model/think_tokenizer'
 
-    data_path = 'D:/think-dataset/think-llm-pretrain/Mini'
-    train_loader = PretrainDataset(config, data_path, tokenizer_path, lru_size = 32, reuse_count = 128)
-    train_loader.sample(2)
+    # data_path = 'D:/data-hub'
+    # train_loader = PretrainDataset(config, data_path, tokenizer_path, lru_size = 32, reuse_count = 128)
+    # train_loader.sample(2)
     # x, y, attn_mask, loss_mask = train_loader.sample(1)
     # print(x.shape, y.shape, attn_mask.shape, loss_mask.shape)
 
-    # data_path = 'D:/think-dataset/think-llm-instruct-follow'
-    # train_loader = SFTDataset(config, data_path, tokenizer_path, lru_size = 32, reuse_count = 128)
-    # train_loader.sample(2)
+    data_path = 'D:/think-dataset/think-llm-instruct-follow/Mini'
+    train_loader = SFTDataset(config, data_path, tokenizer_path, lru_size = 32, reuse_count = 128)
+    train_loader.sample(2)
 
     # data_path = 'D:/think-dataset/think-llm-dpo'
     # config.max_seq_len = 2048
