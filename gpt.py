@@ -212,7 +212,7 @@ class ThinkChat(nn.Module):
     def generate(self, input_ids, start_pos = 0, attention_mask = None, kv_cache = None, max_len = 512,
                  temperature = 0.7, top_p = 0.85, rp = 1.05, eos_token_id = None):
         init_start_pos = input_ids.shape[1]
-        for _ in range(max_len):
+        for _ in range(max_len - input_ids.shape[1]):
             with torch.no_grad():
                 out = self(input_ids[:, start_pos:], start_pos = start_pos, attn_mask = attention_mask,
                            kv_cache = kv_cache)
