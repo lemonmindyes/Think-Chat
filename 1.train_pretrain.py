@@ -14,13 +14,14 @@ from gpt import ThinkChat
 if __name__ == '__main__':
     # param
     dtype = torch.bfloat16
-    batch_size = 8
-    base_lr = 5e-4
-    warmup_ratio = 0.05
+    batch_size = 32
+    base_lr = 3e-4
+    weight_decay = 0.1
+    warmup_ratio = 0.03
     grad_clip = 1.0
     accumulation_steps = 8
-    model_save_step = 100
-    log_print_save_step = 100
+    model_save_step = 200
+    log_print_save_step = 200
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     ctx = nullcontext() if device.type == 'cpu' else torch.amp.autocast(device_type = device.type, dtype = dtype)
@@ -30,15 +31,15 @@ if __name__ == '__main__':
     total_params = sum(p.numel() for p in model.parameters())
     print(f'Total params:{total_params}')
 
-    data_path = 'D:/think-dataset/think-llm-pretrain' # 50835675 lines
+    data_path = 'D:/think-dataset/think-llm-pretrain/Mini'
     tokenizer_path = './model/think_tokenizer'
-    train_loader = PretrainDataset(config, data_path, tokenizer_path, lru_size = 32, reuse_count = 128)
+    train_loader = PretrainDataset(config, data_path, tokenizer_path, lru_size = 64, reuse_count = 64)
 
     loss_func = nn.CrossEntropyLoss(reduction = 'none')
     scaler = torch.amp.GradScaler(enabled = (device.type == 'cuda'))
-    opt = torch.optim.AdamW(model.parameters(), lr = base_lr, betas = (0.9, 0.95), weight_decay = 0.0)
+    opt = torch.optim.AdamW(model.parameters(), lr = base_lr, betas = (0.9, 0.95), weight_decay = weight_decay)
 
-    update_step = 100000 # update iter
+    update_step = 20000 # update iter
     total_step = update_step * accumulation_steps
     warmup_step = int(warmup_ratio * total_step)
     if not os.path.exists('pretrain_train_log.txt'):
@@ -103,16 +104,12 @@ if __name__ == '__main__':
             model.eval()
             tokenizer = AutoTokenizer.from_pretrained('./model/think_tokenizer')
 
-            # 8月29日凌晨,浙江大学一名刚报到的大一女生从寝室上铺摔下,至发稿时已被送往重症监护室,尚未脱离生命危险。
-            # 据学校老师说,女孩姓徐,江苏人,是从上下铺的上层摔下来,床沿有栏杆,但具体经过他不清楚。据介绍,4点40多分女孩被送到市二医院,当时处于昏迷状态。
-            # 上午10点10分左右,杭州市二医院手术室的门打开,医生向学校和家属介绍,女孩颅骨骨折,有脑水肿、脑挫伤。
-            # 10点30分,女孩手术完毕,被推了出来,医生称手术顺利。
-            # 女孩母亲告诉记者,她们夫妻26日陪女儿到校报到,27日回家,\"今天早上4点多接到学校的电话,就连忙赶来。\"经ct检查,颅内有出血和水肿,
-            # 医院进行了开颅手术,清除血肿,术后已送往重症监护室,还未脱离生命危险,后续要进一步观察。据了解,这名女生徐,今年18岁,是江苏人,
-            # 这个月26号才来校报到,还没有参加新生军训。今天凌晨,她从寝室床的上铺意外摔了下来,随后同寝室的室友赶紧拨打了120,老师也赶紧赶来,一起赶到医院。
-            # 参与抢救的医生表示,女孩送到医院的时候处于昏迷状态,她头部的伤口在右侧耳廓等处,有明显的外伤。手术进行了三个小时,主要是脑挫伤,左侧的硬膜下血肿,右侧也有骨折。
-            # 医生表示,仅就手术来说,抢救是顺利的,但目前还没有脱离生命危险。上午10点40分,女生的父母赶到了医院,一直眼泪汪汪,至始至终一言不发。
-            text = f'<im_start>8月29日凌晨,浙江大学一名刚报到的大一女生从寝室上铺摔下,至发稿时已被送往重症监护室,尚未脱离生命危险。据学校老师说,'
+            # 尿路感染的病因是什么??
+            # 非复杂性尿路感染80%由大肠杆菌引起,10~15%由葡萄球菌和克雷白氏杆菌引起,仅2~5%是由变性杆菌所致。
+            # 而复杂性尿路感染的细菌谱则要广的多,大肠杆菌仍为主要致病菌,
+            # 但许多其它的革兰氏阴性细菌如变性杆菌、沙雷菌属、克雷白菌及假单孢菌属等,均可导致复杂性尿路感染。
+            # 在糖尿病患者或免疫力低下的患者中,霉菌的感染日益增多。
+            text = f'<im_start>尿路感染的病因是什么?'
 
             encoder = tokenizer.batch_encode_plus([text])
             input_ids = torch.tensor(encoder['input_ids'], dtype = torch.long, device = device)
@@ -121,10 +118,10 @@ if __name__ == '__main__':
             # print(attention_mask)
             kv_cache = {}
             start_pos = 0
-            out = model.generate(input_ids, start_pos, attention_mask, kv_cache, temperature = 0.85, top_p = 0.85,
+            out = model.generate(input_ids, start_pos, attention_mask, kv_cache, temperature = 0.7, top_p = 0.95,
                                  rp = 1.05, eos_token_id = 2)
             pred = tokenizer.decode(out[0, :])
-            print(text + ''.join(pred))
+            print(text + '\n' + ''.join(pred))
 
         if (step + 1) % model_save_step == 0:
             checkpoint = {
